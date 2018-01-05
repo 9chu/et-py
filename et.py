@@ -24,9 +24,12 @@ class ForNode(Node):
 
     def render(self, context):
         result = eval(self.expression, globals(), context)
+        origin = context[self.identifier] if self.identifier in context else None
         for i in result:
             context[self.identifier] = i
             yield iter(self.nodes)
+        if origin:
+            context[self.identifier] = origin
 
 
 class IfNode(Node):
@@ -126,6 +129,46 @@ class Parser:
     def __init__(self, text):
         self._text = text
         self._consumer = TextConsumer(text)
+
+    @staticmethod
+    def _is_starting_by_new_line(text):
+        for i in range(0, len(text)):
+            ch = text[i:i + 1]
+            if ch == '\n':
+                return True
+            elif not ch.isspace():
+                break
+        return False
+
+    @staticmethod
+    def _is_ending_by_new_line(text):
+        for i in range(len(text) - 1, -1, -1):
+            ch = text[i:i + 1]
+            if ch == '\n':
+                return True
+            elif not ch.isspace():
+                break
+        return False
+
+    @staticmethod
+    def _trim_left_until_new_line(text):
+        for i in range(0, len(text)):
+            ch = text[i:i+1]
+            if ch == '\n':
+                return text[i+1:]
+            elif not ch.isspace():
+                break
+        return text
+
+    @staticmethod
+    def _trim_right_until_new_line(text):
+        for i in range(len(text) - 1, -1, -1):
+            ch = text[i:i+1]
+            if ch == '\n':
+                return text[0:i+1]  # save right \n
+            elif not ch.isspace():
+                break
+        return text
 
     @staticmethod
     def _parse_blank(consumer):
@@ -243,15 +286,51 @@ class Parser:
             end = self._consumer.get_pos()
         return Parser.OUTER_TOKEN_LITERAL, self._consumer.substr(begin, end), begin_line, begin_row
 
+    @staticmethod
+    def _trim_empty_line(result):
+        state = 0
+        left = None  # 需要剔除右边的元素
+        for i in range(0, len(result)):
+            cur = result[i]
+            p = result[i - 1] if i != 0 else None
+            n = result[i + 1] if i != len(result) - 1 else None
+            if state == 0:
+                # 当前是表达式，且上一个是文本
+                if cur[0] == Parser.OUTER_TOKEN_EXPRESS:
+                    if p is None or (p[0] == Parser.OUTER_TOKEN_LITERAL and Parser._is_ending_by_new_line(p[1])):
+                        left = i - 1 if p else None
+                        state = 1
+            if state == 1:
+                if n is None or (n[0] == Parser.OUTER_TOKEN_LITERAL and Parser._is_starting_by_new_line(n[1])):
+                    right = i + 1 if n else None
+                    if left is not None:
+                        result[left] = (result[left][0],
+                                        Parser._trim_right_until_new_line(result[left][1]),
+                                        result[left][2],
+                                        result[left][3])
+                    if right is not None:
+                        result[right] = (result[right][0],
+                                         Parser._trim_left_until_new_line(result[right][1]),
+                                         result[right][2],
+                                         result[right][3])
+                    state = 0
+                elif cur[0] != Parser.OUTER_TOKEN_EXPRESS:  # 行中有其他文本，不进行剔除
+                    state = 0
+
     def process(self):
         root = []  # 根
         nodes = []  # 未闭合节点队列
-        while True:
+        outer_results = []
+        while True:  # 为了剔除空行，需要先解析完所有的根元素做预处理
+            ret = self._parse_outer()
+            if ret[0] == Parser.OUTER_TOKEN_LITERAL and ret[1] == "":  # EOF
+                break
+            outer_results.append(ret)
+        Parser._trim_empty_line(outer_results)
+        for i in outer_results:
+            (t, content, line, row) = i
             back = None if len(nodes) == 0 else nodes[len(nodes) - 1]
-            (t, content, line, row) = self._parse_outer()
             if t == Parser.OUTER_TOKEN_LITERAL:
-                if content == "":
-                    break  # EOF
                 root.append(content) if back is None else back.nodes.append(content)
             else:
                 assert t == Parser.OUTER_TOKEN_EXPRESS
@@ -313,7 +392,7 @@ class Parser:
         return root
 
 
-def _render(root, **context):
+def _render(root, context):
     output = []
     stack = [iter(root)]
     while stack:
@@ -332,15 +411,23 @@ def _render(root, **context):
     return "".join(output)
 
 
-if __name__ == "__main__":
-    template = '''
-        <LogCategoryCount>{% len(logs) %}</LogCategoryCount>
-        {% for i in logs %}
-        <LogCategory type="net">
-            <Url>{% i %}</Url>
-        </LogCategory>
-        {% end %}
-    '''
+def render(template, **context):
     p = Parser(template)
     root = p.process()
-    print(_render(root, logs=["tcp://10.123.23.14:5000", "tcp://10.123.23.15:5000"]))
+    return _render(root, context)
+
+
+if __name__ == "__main__":
+    tpl = '''
+        <!-- i: {% i %} -->
+        <LogCategoryCount>{% len(logs) %}</LogCategoryCount>
+        {% for i in range(0, len(logs)) %}
+        <LogCategory type="net">
+            {% if i == 0 %}
+            <Url>{% logs[i] %}</Url>
+            {% end %}
+        </LogCategory>
+        {% end %}
+        <!-- i: {% i %} -->
+    '''
+    print(render(tpl, i=1, logs=["tcp://10.123.23.14:5000", "tcp://10.123.23.15:5000"]))
