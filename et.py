@@ -23,7 +23,7 @@ class ForNode(Node):
         self.expression = expression
 
     def render(self, context):
-        result = eval(self.expression, globals(), context)
+        result = eval(self.expression, None, context)
         origin = context[self.identifier] if self.identifier in context else None
         for i in result:
             context[self.identifier] = i
@@ -39,7 +39,7 @@ class IfNode(Node):
         self.true_branch = self.nodes
 
     def render(self, context):
-        test = eval(self.expression, globals(), context)
+        test = eval(self.expression, None, context)
         if test:
             yield iter(self.true_branch)
 
@@ -52,7 +52,7 @@ class IfElseNode(Node):
         self.false_branch = self.nodes
 
     def render(self, context):
-        test = eval(self.expression, globals(), context)
+        test = eval(self.expression, None, context)
         if test:
             yield iter(self.true_branch)
         else:
@@ -65,7 +65,7 @@ class ExpressionNode(Node):
         self.expression = expression
 
     def render(self, context):
-        return eval(self.expression, globals(), context)
+        return eval(self.expression, None, context)
 
 
 # --- 解析部分 ---
